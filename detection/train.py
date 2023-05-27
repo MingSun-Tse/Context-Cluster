@@ -167,6 +167,9 @@ def main():
         test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
+    print(model)
+    exit(0)
+
     datasets = [build_dataset(cfg.data.train)]
     if len(cfg.workflow) == 2:
         val_dataset = copy.deepcopy(cfg.data.val)
@@ -180,6 +183,15 @@ def main():
             CLASSES=datasets[0].CLASSES)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
+
+    # @mst: Pruning
+    from pruner.l1_pruner import Pruner
+    from smilelogging import Logger as logger
+    loader = None
+    args.stage_pr = ""
+    pruner = Pruner(model, loader, logger, args)
+    model = pruner.prune()
+
     train_detector(
         model,
         datasets,
