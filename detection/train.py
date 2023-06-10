@@ -12,7 +12,7 @@ from mmcv.runner import get_dist_info, init_dist
 from mmcv.utils import get_git_hash
 
 from mmdet import __version__
-from mmdet.apis import set_random_seed #, train_detector
+from mmdet.apis import set_random_seed  # , train_detector
 from mmdet_custom.apis.train import train_detector
 from mmdet.datasets import build_dataset
 from mmdet.models import build_detector
@@ -21,11 +21,15 @@ import mmcv_custom.runner.epoch_based_runner
 import mmcv_custom.runner.optimizer
 
 import sys
+
 sys.path.append('../')
 import models
 
+from smilelogging import argparser as parser
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train a detector')
+    # parser = argparse.ArgumentParser(description='Train a detector')
     parser.add_argument('config', help='train config file path')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
     parser.add_argument(
@@ -39,13 +43,13 @@ def parse_args():
         '--gpus',
         type=int,
         help='number of gpus to use '
-        '(only applicable to non-distributed training)')
+             '(only applicable to non-distributed training)')
     group_gpus.add_argument(
         '--gpu-ids',
         type=int,
         nargs='+',
         help='ids of gpus to use '
-        '(only applicable to non-distributed training)')
+             '(only applicable to non-distributed training)')
     parser.add_argument('--seed', type=int, default=None, help='random seed')
     parser.add_argument(
         '--deterministic',
@@ -56,25 +60,32 @@ def parse_args():
         nargs='+',
         action=DictAction,
         help='override some settings in the used config, the key-value pair '
-        'in xxx=yyy format will be merged into config file (deprecate), '
-        'change to --cfg-options instead.')
+             'in xxx=yyy format will be merged into config file (deprecate), '
+             'change to --cfg-options instead.')
     parser.add_argument(
         '--cfg-options',
         nargs='+',
         action=DictAction,
         help='override some settings in the used config, the key-value pair '
-        'in xxx=yyy format will be merged into config file. If the value to '
-        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
-        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
-        'Note that the quotation marks are necessary and that no white space '
-        'is allowed.')
+             'in xxx=yyy format will be merged into config file. If the value to '
+             'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
+             'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
+             'Note that the quotation marks are necessary and that no white space '
+             'is allowed.')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
-    args = parser.parse_args()
+
+    # ------------------------------------
+    # For pruning
+    from pruner.prune_utils import set_up_prune_args
+    args, unknown = set_up_prune_args(parser)
+    # args = parser.parse_args()
+    # ------------------------------------
+
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
 
@@ -91,6 +102,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # ------------------------
+    from smilelogging import Logger
+    smlogger = Logger(args)
+    # ------------------------
 
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
@@ -161,14 +177,34 @@ def main():
     meta['seed'] = args.seed
     meta['exp_name'] = osp.basename(args.config)
 
+    # print(cfg.model, args)
     model = build_detector(
         cfg.model,
         train_cfg=cfg.get('train_cfg'),
         test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
-    print(model)
-    exit(0)
+    # ---------------------------
+    # For pruning
+    if hasattr(args, 'prune_method') and args.prune_method != '':
+        from pruner.l1_pruner import Pruner
+        class passer: pass
+        passer.dummy_input = torch.randn(1, 3, 224, 224)
+        args.stage_pr = {'*layer[1-3]*conv[1-2]': 0.68,
+                         '*layer4*conv[1-2]': 0.5,
+                         }
+        args.skip_layers = []
+        model.backbone = model.backbone.cpu()
+        pruner = Pruner(model=model.backbone,
+                        loader=None,
+                        logger=smlogger,
+                        args=args,
+                        passer=passer)
+        model.backbone = pruner.prune()
+        ckpt = torch.load('CM__resnet50__3.06x.pth', map_location=torch.device('cpu'))
+        model.backbone.load_state_dict(ckpt['state_dict'], strict=False)
+        smlogger.info(f'==> Load pretrained weights successfully')
+    # ---------------------------
 
     datasets = [build_dataset(cfg.data.train)]
     if len(cfg.workflow) == 2:
@@ -183,14 +219,6 @@ def main():
             CLASSES=datasets[0].CLASSES)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
-
-    # @mst: Pruning
-    from pruner.l1_pruner import Pruner
-    from smilelogging import Logger as logger
-    loader = None
-    args.stage_pr = ""
-    pruner = Pruner(model, loader, logger, args)
-    model = pruner.prune()
 
     train_detector(
         model,

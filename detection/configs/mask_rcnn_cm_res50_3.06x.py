@@ -6,23 +6,6 @@ _base_ = [
 ]
 
 # optimizer
-model = dict(
-    backbone=dict(
-        type='context_cluster_small_feat2',
-        style='pytorch',
-        init_cfg=dict(
-            type='Pretrained',
-            checkpoint= \
-                '{path-to-checkpoint}/model_best.pth.tar',
-        ),
-    ),
-    neck=dict(
-        type='FPN',
-        in_channels=[64, 128, 320, 512],
-        out_channels=256,
-        num_outs=5))
-
-# optimizer
 optimizer = dict(_delete_=True, type='AdamW', lr=0.0002, weight_decay=0.0001)
 # do not use mmdet version fp16
 fp16 = None
